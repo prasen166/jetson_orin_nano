@@ -1,0 +1,44 @@
+<launch>
+  <!-- Arguments -->
+  <arg name="fcu_url" default="/dev/ttyACM0:921600"/>
+  <arg name="gcs_url" default="udp://@192.168.1.100"/>
+  <arg name="tgt_system" default="1"/>
+  <arg name="tgt_component" default="1"/>
+
+  <!-- 1. MAVROS for ArduPilot - FIXED: Use apm.launch for Noetic -->
+  <include file="$(find mavros)/launch/apm.launch">
+    <arg name="fcu_url" value="$(arg fcu_url)"/>
+    <arg name="gcs_url" value="$(arg gcs_url)"/>
+    <arg name="tgt_system" value="$(arg tgt_system)"/>
+    <arg name="tgt_component" value="$(arg tgt_component)"/>
+  </include>
+
+  <!-- 2. CRITICAL FIX: Static TF for NED frame convention -->
+  <!-- ArduPilot expects map_ned frame -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="map_ned_to_odom" 
+        args="0 0 0 0 0 0 map_ned odom"/>
+        
+  <!-- Connect FAST-LIO's odom to our frame -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="odom_to_camera_init" 
+        args="0 0 0 0 0 0 odom camera_init"/>
+
+  <!-- 3. FAST-LIO to MAVROS Bridge (FIXED VERSION) -->
+  <node pkg="fastlio_mavros_bridge" type="fastlio_to_mavros_improved.py" 
+        name="fastlio_to_mavros" output="screen">
+    <!-- CRITICAL: Use map_ned frame for ArduPilot -->
+    <param name="frame_id" value="map_ned"/>
+    <param name="child_frame_id" value="base_link"/>
+    <param name="odom_topic" value="/Odometry"/>
+    <param name="publish_velocity" value="false"/>
+    <param name="covariance_scale" value="1.0"/>
+    <param name="max_rate" value="30.0"/>
+  </node>
+
+  <!-- 4. Safety Monitor -->
+  <node pkg="fastlio_mavros_bridge" type="slam_safety_monitor_improved.py" 
+        name="slam_safety_monitor" output="screen">
+    <param name="pose_topic" value="/mavros/vision_pose/pose_cov"/>
+    <param name="max_position_jump" value="2.0"/>
+    <param name="max_no_data_time" value="0.5"/>
+  </node>
+</launch>

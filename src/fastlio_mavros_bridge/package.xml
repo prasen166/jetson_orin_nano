@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>fastlio_mavros_bridge</name>
+  <version>1.0.0</version>
+  <description>Reliable bridge between FAST-LIO and MAVROS for drone navigation</description>
+
+  <maintainer email="your@email.com">Your Name</maintainer>
+  <license>MIT</license>
+
+  <url type="website">https://github.com/yourusername/fastlio_mavros_bridge</url>
+
+  <author email="your@email.com">Your Name</author>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>rospy</depend>
+  <depend>roscpp</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>mavros_msgs</depend>
+  <depend>tf</depend>
+  <depend>tf2_ros</depend>
+
+  <exec_depend>mavros</exec_depend>
+  <exec_depend>fast_lio</exec_depend>
+
+  <test_depend>rostest</test_depend>
+</package>
+
