@@ -18,8 +18,6 @@ catkin_package(
 
 catkin_install_python(PROGRAMS
   scripts/fastlio_to_mavros_improved.py
-  scripts/slam_safety_monitor_improved.py
-  scripts/fastlio_diagnostics.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

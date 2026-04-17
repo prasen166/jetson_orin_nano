@@ -16,13 +16,17 @@ This guide explains how to achieve stable drone flight using FAST-LIO SLAM with 
 
 ## Coordinate Frames
 
-**CRITICAL**: All frames must align to ENU (East-North-Up) convention:
+**CRITICAL**: The bridge now outputs NED (North-East-Down) directly to MAVROS:
 
-- `map` - Earth-fixed frame (ENU)
-- `odom` - Odometry origin (where SLAM started, ENU)
+- `map_ned` - ArduPilot's earth-fixed frame (NED) **MUST BE USED**
+- `odom_ned` - Odometry origin in NED
+- `odom` - FAST-LIO's origin (ENU - converted to NED by bridge)
 - `camera_init` - FAST-LIO's world frame (aligned to `odom`)
 - `body` - FAST-LIO's robot frame (IMU/LiDAR frame)
 - `base_link` - ArduPilot standard robot frame
+
+**WARNING**: Using `frame_id = "odom"` will cause drift because MAVROS won't convert to NED.
+The bridge must use `frame_id = "map_ned"` for ArduPilot to correctly interpret the data.
 
 ## Critical Fixes Applied
 
@@ -66,9 +70,9 @@ VISO_TYPE = 1
 
 # EKF3 Source Selection (Primary = External Navigation)
 EK3_SRC1_POSXY = 6    # External Navigation
-EK3_SRC1_VELXY = 6    # External Navigation
+EK3_SRC1_VELXY = 0    # DISABLED - FAST-LIO velocity from position diff has 500ms lag
 EK3_SRC1_POSZ  = 6    # External Navigation
-EK3_SRC1_VELZ  = 6    # External Navigation
+EK3_SRC1_VELZ  = 0    # DISABLED - Use barometer/IMU for Z velocity (more reliable)
 EK3_SRC1_YAW   = 6    # External Navigation
 
 # GPS as fallback (Source 2)
@@ -91,6 +95,27 @@ EK3_VELD_M_NSE  = 0.1    # Vertical velocity noise (m/s)
 
 # Vision delay compensation
 VISO_DELAY_MS = 50      # FAST-LIO processing delay (milliseconds)
+```
+
+### Velocity Configuration (IMPORTANT)
+
+**RECOMMENDATION**: Keep velocity publishing DISABLED
+
+```python
+# In fastlio_mavros_integration.launch:
+<param name="publish_velocity" value="false"/>
+```
+
+**Why?**
+- FAST-LIO outputs at 10 Hz with position-based velocity
+- 5-sample moving average creates 500ms lag
+- This confuses ArduPilot's EKF and causes drift
+- Barometer/IMU provide better Z velocity
+
+If you must enable velocity:
+```python
+EK3_SRC1_VELXY = 6    # External Navigation (use with caution)
+EK3_SRC1_VELZ  = 0    # Keep disabled - barometer is better
 ```
 
 ## Usage
