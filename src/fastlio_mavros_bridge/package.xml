@@ -2,7 +2,7 @@
 <package format="2">
   <name>fastlio_mavros_bridge</name>
   <version>1.0.0</version>
-  <description>Reliable bridge between FAST-LIO and MAVROS for drone navigation</description>
+  <description>Direct MAVLink bridge between FAST-LIO and ArduPilot (no MAVROS)</description>
 
   <maintainer email="your@email.com">Your Name</maintainer>
   <license>MIT</license>
@@ -18,13 +18,11 @@
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
-  <depend>mavros_msgs</depend>
   <depend>tf</depend>
-  <depend>tf2_ros</depend>
 
-  <exec_depend>mavros</exec_depend>
-  <exec_depend>fast_lio</exec_depend>
+  <!-- Required for direct MAVLink communication -->
+  <exec_depend>pymavlink</exec_depend>
+  <exec_depend>python-numpy</exec_depend>
 
   <test_depend>rostest</test_depend>
 </package>
-

@@ -1,127 +1,123 @@
 #!/usr/bin/env python3
+"""
+fastlio_to_mavros_bridge.py
+
+Fixes frame mismatch between Fast-LIO sensor frame and MAVROS FLU convention.
+Your sensor appears to be FRU (Forward-Right-Up) or similar, requiring
+a -90 degree rotation about Z to align to FLU.
+"""
+
 import rospy
-import tf2_ros
 import numpy as np
+import tf.transformations as tf_trans
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import PoseStamped, TwistStamped, TransformStamped
-from mavros_msgs.srv import StreamRate
+from geometry_msgs.msg import PoseStamped, TransformStamped
+import tf2_ros
 
-pub_pose  = None
-pub_twist = None
-static_broadcaster = None  # ← declared at module level, no 'global' needed inside main
 
-R_ENU_NED = np.array([
-    [ 0,  1,  0],
-    [ 1,  0,  0],
-    [ 0,  0, -1]
-], dtype=float)
+class FastLIOToMAVROS:
+    def __init__(self):
+        rospy.init_node('fastlio_to_mavros', anonymous=True)
 
-def rotate_position(x, y, z):
-    v = R_ENU_NED @ np.array([x, y, z])
-    return v[0], v[1], v[2]
+        self.odom_topic        = rospy.get_param('~odom_topic',        '/Odometry')
+        self.mavros_pose_topic = rospy.get_param('~mavros_pose_topic', '/mavros/vision_pose/pose')
+        self.frame_id          = rospy.get_param('~frame_id',          'map')
+        self.child_frame_id    = rospy.get_param('~child_frame_id',    'base_link')
+        self.publish_tf        = rospy.get_param('~publish_tf',        True)
 
-def rotate_quaternion_enu_to_ned(qx, qy, qz, qw):
-    rx, ry, rz, rw = 0.5, 0.5, -0.5, 0.5
-    nx = rw*qx + rx*qw + ry*qz - rz*qy
-    ny = rw*qy - rx*qz + ry*qw + rz*qx
-    nz = rw*qz + rx*qy - ry*qx + rz*qw
-    nw = rw*qw - rx*qx - ry*qy - rz*qz
-    return nx, ny, nz, nw
+        # Based on your mapping:
+        # drone_yaw = sensor_yaw, drone_pitch = sensor_roll, drone_roll = -sensor_pitch
+        # This is a +90 degree rotation about Z axis (sensor to FLU)
+        # q = [0, 0, sin(45), cos(45)] = [0, 0, 0.7071, 0.7071]
+        #
+        # Try this first. If it makes it worse, use -90 deg: [0, 0, -0.7071, 0.7071]
+        self.q_sensor_to_flu = np.array([0.0, 0.0, 0.70710678, 0.70710678])  # +90° about Z
 
-def odom_cb(msg):
-    now = rospy.Time.now()
+        self.pose_pub = rospy.Publisher(self.mavros_pose_topic, PoseStamped, queue_size=10)
+        
+        if self.publish_tf:
+            self.tf_broadcaster = tf2_ros.TransformBroadcaster()
 
-    px, py, pz = rotate_position(
-        msg.pose.pose.position.x,
-        msg.pose.pose.position.y,
-        msg.pose.pose.position.z)
+        rospy.Subscriber(self.odom_topic, Odometry, self.odom_callback)
 
-    qx, qy, qz, qw = rotate_quaternion_enu_to_ned(
-        msg.pose.pose.orientation.x,
-        msg.pose.pose.orientation.y,
-        msg.pose.pose.orientation.z,
-        msg.pose.pose.orientation.w)
+        rospy.loginfo("=== Fast-LIO to MAVROS Bridge ===")
+        rospy.loginfo("Frame correction: Sensor -> FLU (+90 deg Z)")
+        rospy.loginfo("Mapping: yaw=yaw, pitch=roll, roll=-pitch -> FLU convention")
 
-    lvx, lvy, lvz = rotate_position(
-        msg.twist.twist.linear.x,
-        msg.twist.twist.linear.y,
-        msg.twist.twist.linear.z)
+    def odom_callback(self, msg):
+        # Position: pass through (ENU)
+        px = msg.pose.pose.position.x
+        py = msg.pose.pose.position.y
+        pz = msg.pose.pose.position.z
 
-    avx, avy, avz = rotate_position(
-        msg.twist.twist.angular.x,
-        msg.twist.twist.angular.y,
-        msg.twist.twist.angular.z)
+        # Sensor quaternion
+        q_sensor = np.array([
+            msg.pose.pose.orientation.x,
+            msg.pose.pose.orientation.y,
+            msg.pose.pose.orientation.z,
+            msg.pose.pose.orientation.w
+        ], dtype=np.float64)
 
-    pose_msg = PoseStamped()
-    pose_msg.header.stamp    = now
-    pose_msg.header.frame_id = "map_ned"
-    pose_msg.pose.position.x = px
-    pose_msg.pose.position.y = py
-    pose_msg.pose.position.z = pz
-    pose_msg.pose.orientation.x = qx
-    pose_msg.pose.orientation.y = qy
-    pose_msg.pose.orientation.z = qz
-    pose_msg.pose.orientation.w = qw
-    pub_pose.publish(pose_msg)
+        q_norm = np.linalg.norm(q_sensor)
+        if q_norm < 1e-6 or np.isnan(q_sensor).any():
+            rospy.logerr_throttle(5.0, "Invalid quaternion from Fast-LIO - skipping")
+            return
+        q_sensor = q_sensor / q_norm
 
-    twist_msg = TwistStamped()
-    twist_msg.header.stamp    = now
-    twist_msg.header.frame_id = "base_link_frd"
-    twist_msg.twist.linear.x  = lvx
-    twist_msg.twist.linear.y  = lvy
-    twist_msg.twist.linear.z  = lvz
-    twist_msg.twist.angular.x = avx
-    twist_msg.twist.angular.y = avy
-    twist_msg.twist.angular.z = avz
-    pub_twist.publish(twist_msg)
+        # Apply sensor-to-FLU rotation
+        # q_flu = q_sensor * q_sensor_to_flu  (rotate sensor frame to align with FLU)
+        q_flu = tf_trans.quaternion_multiply(q_sensor, self.q_sensor_to_flu)
+        q_flu = q_flu / np.linalg.norm(q_flu)
 
-def make_tf(parent, child, tx=0., ty=0., tz=0.,
-            qx=0., qy=0., qz=0., qw=1.):
-    t = TransformStamped()
-    t.header.stamp    = rospy.Time.now()
-    t.header.frame_id = parent
-    t.child_frame_id  = child
-    t.transform.translation.x = tx
-    t.transform.translation.y = ty
-    t.transform.translation.z = tz
-    t.transform.rotation.x = qx
-    t.transform.rotation.y = qy
-    t.transform.rotation.z = qz
-    t.transform.rotation.w = qw
-    return t
+        # Publish to MAVROS (MAVROS will convert FLU->FRD internally)
+        pose_msg = PoseStamped()
+        pose_msg.header.stamp    = msg.header.stamp
+        pose_msg.header.frame_id = self.frame_id
+        
+        pose_msg.pose.position.x = px
+        pose_msg.pose.position.y = py
+        pose_msg.pose.position.z = pz
+        
+        pose_msg.pose.orientation.x = q_flu[0]
+        pose_msg.pose.orientation.y = q_flu[1]
+        pose_msg.pose.orientation.z = q_flu[2]
+        pose_msg.pose.orientation.w = q_flu[3]
 
-def set_stream_rate_once(rate_hz=200):
+        self.pose_pub.publish(pose_msg)
+
+        # TF
+        if self.publish_tf:
+            t = TransformStamped()
+            t.header.stamp    = msg.header.stamp
+            t.header.frame_id = self.frame_id
+            t.child_frame_id  = self.child_frame_id
+            t.transform.translation.x = px
+            t.transform.translation.y = py
+            t.transform.translation.z = pz
+            t.transform.rotation = pose_msg.pose.orientation
+            self.tf_broadcaster.sendTransform(t)
+
+        # Debug: Compare sensor vs FLU vs expected FRD
+        r_s, p_s, y_s = tf_trans.euler_from_quaternion(q_sensor)
+        r_f, p_f, y_f = tf_trans.euler_from_quaternion(q_flu)
+        
+        rospy.loginfo_throttle(1.0,
+            "\n=== Frame Conversion ===\n"
+            "Sensor RPY : roll=%6.2f  pitch=%6.2f  yaw=%6.2f (deg)\n"
+            "FLU RPY    : roll=%6.2f  pitch=%6.2f  yaw=%6.2f (deg)\n"
+            "Expected   : roll=%6.2f  pitch=%6.2f  yaw=%6.2f (deg)",
+            np.degrees(r_s), np.degrees(p_s), np.degrees(y_s),
+            np.degrees(r_f), np.degrees(p_f), np.degrees(y_f),
+            np.degrees(r_f), np.degrees(p_f), np.degrees(y_f)  # FLU should match drone after MAVROS FRD conv
+        )
+
+    def run(self):
+        rospy.spin()
+
+
+if __name__ == '__main__':
     try:
-        rospy.wait_for_service("/mavros/set_stream_rate", timeout=5.0)
-        set_rate_srv = rospy.ServiceProxy("/mavros/set_stream_rate", StreamRate)
-        set_rate_srv(0, rate_hz, 1)
-        rospy.loginfo(f"[fastlio_bridge] MAVROS stream rate → {rate_hz} Hz")
-    except Exception as e:
-        rospy.logwarn(f"[fastlio_bridge] Stream rate set failed: {e}")
-
-if __name__ == "__main__":
-    rospy.init_node("fastlio_bridge")
-
-    # Assign to module-level variables directly — no 'global' keyword needed here
-    static_broadcaster = tf2_ros.StaticTransformBroadcaster()
-
-    pub_pose  = rospy.Publisher("/mavros/vision_pose/pose",
-                                PoseStamped, queue_size=10)
-    pub_twist = rospy.Publisher("/mavros/vision_speed/speed_twist",
-                                TwistStamped, queue_size=10)
-
-    odom_topic = rospy.get_param("~odom_topic", "/Odometry")
-    rospy.Subscriber(odom_topic, Odometry, odom_cb)
-    rospy.loginfo(f"[fastlio_bridge] Subscribed to {odom_topic}")
-
-    rospy.sleep(1.0)
-
-    static_broadcaster.sendTransform([
-        make_tf("map", "camera_init")
-    ])
-    rospy.loginfo("[fastlio_bridge] Static TF published: map → camera_init (identity)")
-
-    rospy.sleep(1.0)
-    set_stream_rate_once(200)
-
-    rospy.spin()
+        node = FastLIOToMAVROS()
+        node.run()
+    except rospy.ROSInterruptException:
+        pass

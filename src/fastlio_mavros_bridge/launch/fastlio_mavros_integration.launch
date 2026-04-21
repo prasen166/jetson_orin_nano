@@ -6,7 +6,7 @@
   <arg name="tgt_component" default="1"/>
   <arg name="odom_topic"    default="/Odometry"/>
 
-  <!-- 1. MAVROS (ArduPilot / APM) -->
+  <!-- MAVROS for ArduPilot -->
   <include file="$(find mavros)/launch/apm.launch">
     <arg name="fcu_url"       value="$(arg fcu_url)"/>
     <arg name="gcs_url"       value="$(arg gcs_url)"/>
@@ -16,14 +16,25 @@
     <arg name="fcu_protocol"  value="v2.0"/>
   </include>
 
-  <!-- 2. FAST-LIO → MAVROS bridge (manual ENU→NED) -->
+  <!-- MAVROS timing params -->
+  <param name="/mavros/conn/timesync_rate"      value="10.0"/>
+  <param name="/mavros/conn/system_time_rate"   value="1.0"/>
+  <param name="/mavros/time/time_ref_source"    value="fcu"/>
+  <param name="/mavros/time/timesync_mode"      value="MAVLINK"/>
+  <param name="/mavros/time/timesync_avg_alpha" value="0.6"/>
+
+  <!-- Fast-LIO to MAVROS bridge (ENU pass-through, no conversion) -->
   <node pkg="fastlio_mavros_bridge"
         type="fastlio_to_mavros_improved.py"
         name="fastlio_bridge"
         output="screen"
         respawn="true"
-        respawn_delay="3">
-    <param name="odom_topic" value="$(arg odom_topic)"/>
+        respawn_delay="5">
+    <param name="odom_topic"        value="$(arg odom_topic)"/>
+    <param name="mavros_pose_topic" value="/mavros/vision_pose/pose"/>
+    <param name="frame_id"          value="map"/>
+    <param name="child_frame_id"    value="base_link"/>
+    <param name="publish_tf"        value="true"/>
   </node>
 
 </launch>
